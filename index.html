@@ -180,6 +180,8 @@ ol.steps { font-size: .88em; line-height: 1.7; padding-left: 1.3em; color: var(-
       <div class="stat"><div class="v" id="stCut">-</div><div class="l">直近カットタイム</div></div>
       <div class="stat"><div class="v" id="cutFlag">CUT</div><div class="l">カット動作</div></div>
       <div class="stat"><div class="v" id="stShiftMv">-</div><div class="l">シフトセンサー電圧</div></div>
+      <div class="stat"><div class="v" id="stSpeed">-</div><div class="l">車速</div></div>
+      <div class="stat"><div class="v" id="stRatioErr">-</div><div class="l">ギア比のずれ</div></div>
     </div>
     <p class="hint">クラッチのOnはレバーを握っている(クラッチを切っている)状態です。クラッチがOnの間とニュートラルの間は、ギアは「-」になりカットしません。5速ではカットしません。</p>
   </div>
@@ -320,7 +322,7 @@ var CBQ_UUID = {
 };
 var CBQ_CMD_SAVE = 1, CBQ_CMD_ENTER_OTA = 2, CBQ_CMD_FACTORY_RESET = 3;
 var CBQ_ERR_BITS = [
-  [1, "ギア推定が無効(回転数と車速がどのギアの比とも合わない)"],
+  [1, "走行中にギア推定の無効が2秒以上続いています(回転数と車速がどのギアの比とも合わない。センサー・配線・VSSのパルス数を確認)"],
   [2, "設定データが初期化されました(要再設定)"],
   [4, "カットタイムマップが初期化されました(要再設定)"]
 ];
@@ -468,6 +470,12 @@ function cbqOnStatusNotify(e) {
   cbq$("cutFlag").style.visibility = cutting ? "visible" : "hidden";
   cbq$("stShiftMv").textContent = shiftMv + "mV";
   cbq$("liveMv").textContent = shiftMv;
+  if (dv.byteLength >= 16) { // 車速・ギア比のずれ(2026-10-12追加。古いファームでは来ない)
+    var speed10 = dv.getUint16(12, true);
+    var err10 = dv.getUint16(14, true);
+    cbq$("stSpeed").textContent = (speed10 / 10).toFixed(1) + "km/h";
+    cbq$("stRatioErr").textContent = (err10 === 0xFFFF) ? "-" : (err10 / 10).toFixed(1) + "%";
+  }
 
   var banner = cbq$("errBanner");
   if (errMask !== 0) {
