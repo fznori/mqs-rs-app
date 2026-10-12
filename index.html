@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MQS-RS</title>
+<!-- v1.0
+     MQS-RS(RATIO SENSE: Speed & RPM Based Gear Position Estimation)の設定アプリ。
+     MQSの設定アプリ(MatrixQuickShifter/web-app/index.html v1.0)をCB750F用に作り替えたもの。
+     Bluefy互換性の必須要件(MQSで2026-08-13に実機検証で確立。変更しないこと):
+     ・スクリプトは複数の独立<script>ブロックに分割したまま維持する
+     ・"use strict"は使用しない
+     ・グローバル識別子はCBQ_/cbq接頭辞付きのみ(Bluefy注入スクリプトとの衝突回避)
+     ・ES5構文のみ(async/await・アロー関数・const/let・分割代入は使用禁止)
+     ・confirm()/alert()は使用禁止(WKWebViewで表示されない)→2度押し確認方式を使う
+     単一ブロック+strict+無接頭辞の構成ではBluefyで全スクリプトが実行されなかった。 -->
+<style>
+/* =========================================================
+   MQS-RS 設定アプリ(Bluefy / Web Bluetooth用)
+   カラースキーム: MQS設定アプリと同じ黒・白・赤基調
+   ========================================================= */
+:root {
+  --accent: #D3141A;
+  --bg: #0d0d0f;
+  --card: #1c1c1e;
+  --card2: #2a2a2d;
+  --text: #f2f2f2;
+  --muted: #9a9aa0;
+  --ok: #30d158;
+  --warn: #ff9f0a;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+body {
+  font-family: -apple-system, "Hiragino Sans", sans-serif;
+  background: var(--bg); color: var(--text);
+  margin: 0; padding-bottom: 72px;
+}
+header {
+  text-align: center; padding: 18px 12px 0;
+  border-bottom: 2px solid var(--accent);
+}
+header h1 { margin: 0; font-size: 2.6em; letter-spacing: .02em; font-weight: 800; line-height: 1.1; }
+header .sub { color: var(--muted); font-size: .95em; letter-spacing: .08em; margin-top: 4px; }
+header .tagline {
+  text-align: left; font-size: .9em; padding: 12px 4px;
+  margin-top: 12px; border-top: 1px solid #2c2c2e;
+}
+
+/* 接続状態バー */
+#connBar {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 8px; font-size: .85em; background: var(--card);
+}
+#connDot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+#connDot.on { background: var(--ok); }
+
+main { padding: 14px; max-width: 480px; margin: 0 auto; }
+.card {
+  background: var(--card); border-radius: 14px;
+  padding: 16px; margin-bottom: 14px;
+}
+.card h2 { margin: 0 0 12px; font-size: .95em; color: var(--muted); font-weight: 600; }
+
+button {
+  background: var(--accent); color: #fff; border: none; border-radius: 10px;
+  padding: 13px 20px; font-size: 1em; font-weight: 600; width: 100%;
+}
+button.secondary { background: var(--card2); }
+button.danger { background: #6e1114; }
+button:disabled { opacity: .4; }
+button + button { margin-top: 10px; }
+button.confirming { background: var(--warn); color: #000; }
+
+select, input[type=password], input[type=text], input[type=number] {
+  background: var(--card2); color: var(--text); border: 1px solid #3a3a3e;
+  border-radius: 8px; padding: 10px; font-size: 1em; width: 100%;
+}
+
+/* タブ */
+nav {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  display: flex; background: #161618; border-top: 1px solid #2c2c2e;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+nav button {
+  flex: 1; background: none; border: none; border-radius: 0;
+  color: var(--muted); font-size: .72em; padding: 10px 2px;
+}
+nav button.active { color: var(--accent); font-weight: 700; }
+.tab { display: none; }
+.tab.active { display: block; }
+
+/* 状態画面 */
+.bigGear {
+  text-align: center; font-size: 4.6em; font-weight: 800; line-height: 1.1;
+}
+.bigGear small { font-size: .3em; color: var(--muted); display: block; font-weight: 400; }
+.statGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.stat { background: var(--card2); border-radius: 10px; padding: 10px; text-align: center; }
+.stat .v { font-size: 1.5em; font-weight: 700; }
+.stat .l { font-size: .72em; color: var(--muted); }
+.stat .v.on { color: var(--warn); }
+#cutFlag { color: var(--accent); font-weight: 700; visibility: hidden; }
+#errBanner {
+  display: none; background: #3a1214; border: 1px solid var(--accent);
+  border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; font-size: .88em;
+}
+
+/* 設定画面 */
+.row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.row label { flex: 1; font-size: .92em; }
+.row select, .row input { width: 150px; flex: none; }
+.hint { color: var(--muted); font-size: .78em; margin: 4px 0 12px; }
+.live { text-align: center; font-size: 1.6em; font-weight: 700; margin: 4px 0 2px; }
+.live small { font-size: .5em; color: var(--muted); font-weight: 400; }
+.analogOnly.hide { display: none; }
+
+/* マップ画面 */
+table.map { width: 100%; border-collapse: collapse; }
+table.map th, table.map td { padding: 3px; text-align: center; font-size: .8em; }
+table.map th { color: var(--muted); font-weight: 600; }
+table.map select { padding: 8px 2px; text-align: center; width: 100%; }
+.dirty { outline: 2px solid var(--warn); border-radius: 8px; }
+
+#toast {
+  position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%);
+  background: var(--card2); color: var(--text); border-radius: 20px;
+  padding: 10px 22px; font-size: .88em; opacity: 0; transition: opacity .3s;
+  pointer-events: none; white-space: nowrap; z-index: 10;
+}
+#toast.show { opacity: 1; }
+.ver { text-align: center; color: var(--muted); font-size: .75em; margin-top: 4px; }
+ol.steps { font-size: .88em; line-height: 1.7; padding-left: 1.3em; color: var(--text); }
+
+/* JSエラー表示オーバーレイ(Bluefyには開発者ツールが無いため画面に直接表示する) */
+#errOverlay {
+  display: none; position: fixed; top: 0; left: 0; right: 0; z-index: 99;
+  background: #7a1013; color: #fff; font-size: .78em;
+  padding: 10px 12px; word-break: break-all;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>MQS-RS</h1>
+  <div class="sub">RATIO SENSE</div>
+  <div class="tagline">Speed &amp; RPM Based Gear Position Estimation</div>
+</header>
+
+<div id="connBar"><div id="connDot"></div><span id="connText">未接続</span></div>
+
+<main>
+
+<!-- ============ 1. 接続タブ ============ -->
+<div class="tab active" id="tab-connect">
+  <div class="card">
+    <h2>接続</h2>
+    <p class="hint">
+      本体側の手順: キーONの直前からシフトスイッチを押したままにし、3秒間保持すると
+      ペアリング/設定モードに入ります(Status LEDが300ms周期で点滅)。
+      モードは未接続のまま120秒でタイムアウトします。
+    </p>
+    <button id="btnConnect">本体に接続する</button>
+    <button id="btnDisconnect" class="secondary" disabled>切断</button>
+    <div class="ver" id="fwVer"></div>
+  </div>
+</div>
+
+<!-- ============ 2. 状態タブ ============ -->
+<div class="tab" id="tab-status">
+  <div id="errBanner"></div>
+  <div class="card">
+    <div class="bigGear"><span id="stGear">-</span><small>GEAR(推定)</small></div>
+    <div class="statGrid">
+      <div class="stat"><div class="v" id="stRpm">0</div><div class="l">RPM</div></div>
+      <div class="stat"><div class="v" id="stBand">-</div><div class="l">RPM帯</div></div>
+      <div class="stat"><div class="v" id="stClutch">-</div><div class="l">クラッチ</div></div>
+      <div class="stat"><div class="v" id="stNeutral">-</div><div class="l">ニュートラル</div></div>
+      <div class="stat"><div class="v" id="stCut">-</div><div class="l">直近カットタイム</div></div>
+      <div class="stat"><div class="v" id="cutFlag">CUT</div><div class="l">カット動作</div></div>
+      <div class="stat"><div class="v" id="stShiftMv">-</div><div class="l">シフトセンサー電圧</div></div>
+    </div>
+    <p class="hint">クラッチのOnはレバーを握っている(クラッチを切っている)状態です。クラッチがOnの間とニュートラルの間は、ギアは「-」になりカットしません。5速ではカットしません。</p>
+  </div>
+</div>
+
+<!-- ============ 3. 設定タブ ============ -->
+<div class="tab" id="tab-config">
+  <div class="card">
+    <h2>タイミング設定</h2>
+    <div class="row">
+      <label>クールタイム<br><span class="hint">再入力を無視する期間</span></label>
+      <select id="selCool"></select>
+    </div>
+    <div class="row">
+      <label>ディレイタイム<br><span class="hint">検知→カット開始の遅延</span></label>
+      <select id="selDelay"></select>
+    </div>
+  </div>
+  <div class="card">
+    <h2>シフトセンサー</h2>
+    <div class="row">
+      <label>モード</label>
+      <select id="selShiftMode">
+        <option value="0">スイッチ(ON/OFF)</option>
+        <option value="1">電圧(荷重センサー)</option>
+      </select>
+    </div>
+    <div class="analogOnly" id="analogBox">
+      <div class="live"><span id="liveMv">-</span> <small>mV(現在のセンサー電圧)</small></div>
+      <p class="hint">センサーを押していない状態と、シフトするときの力で押した状態の電圧を見て、閾値を決めてください。</p>
+      <div class="row">
+        <label>閾値(mV)<br><span class="hint">この電圧以上でシフト検知</span></label>
+        <input type="number" id="inThreshold" min="0" max="5500" step="10" inputmode="numeric">
+      </div>
+      <div class="row">
+        <label>ヒステリシス(mV)<br><span class="hint">閾値−この値を下回ると解除</span></label>
+        <input type="number" id="inHysteresis" min="0" max="5500" step="10" inputmode="numeric">
+      </div>
+    </div>
+    <p class="hint">
+      電圧モードは、基板のJP1をカットしてから使います(スイッチ用のプルアップが外れます)。
+      モードを変えたときは「本体に保存」のあと、電源を入れ直すと有効になります。
+    </p>
+  </div>
+  <div class="card">
+    <button id="btnWriteConfig" disabled>本体へ反映(タイミング+シフトセンサー)</button>
+    <p class="hint">「本体へ反映」は一時適用です。電源OFF後も保持するには下の「本体に保存」を実行してください。</p>
+  </div>
+  <div class="card">
+    <h2>OTA用Wi-Fiパスワード</h2>
+    <input type="password" id="inApPass" placeholder="8〜63文字" autocomplete="off">
+    <p class="hint">初期値は 00000000。変更は即座に本体へ保存されます。</p>
+    <button id="btnWritePass" disabled>パスワードを変更</button>
+    <button id="btnReadPass" class="secondary" disabled>現在のパスワードを表示</button>
+  </div>
+  <div class="card">
+    <h2>保存・リセット</h2>
+    <button id="btnSave" disabled>本体に保存(設定+マップ)</button>
+    <button id="btnFactory" class="danger" disabled>工場出荷リセット</button>
+  </div>
+</div>
+
+<!-- ============ 4. マップタブ ============ -->
+<div class="tab" id="tab-map">
+  <div class="card">
+    <h2>カットタイムマップ(ms)</h2>
+    <table class="map" id="mapTable"></table>
+    <p class="hint">セル値: 50〜120ms、5ms刻み。列=ギア(シフト前)、行=RPM帯(Low≦4000 / Mid≦7000 / Hi&gt;7000rpm)。5速はカットしないため表示していません。</p>
+    <button id="btnWriteMap" disabled>マップを本体へ反映</button>
+    <button id="btnReloadMap" class="secondary" disabled>本体から再読込</button>
+    <p class="hint">反映後、電源OFF後も保持するには設定タブの「本体に保存」を実行してください。</p>
+  </div>
+</div>
+
+<!-- ============ 5. OTAタブ ============ -->
+<div class="tab" id="tab-ota">
+  <div class="card">
+    <h2>ファームウェア更新(OTA)</h2>
+    <div class="ver" id="fwVer2"></div>
+    <ol class="steps">
+      <li>下のボタンでOTAモードを開始(本体がWi-Fi APを起動)</li>
+      <li>iPhoneの設定→Wi-Fiで「<b>MQS-RS-Setup</b>」に接続(パスワードは設定タブ参照、初期値00000000)</li>
+      <li>Safariで <b>http://192.168.4.1</b> を開き、.binファイルを選択して更新</li>
+      <li>転送完了後、本体は自動で再起動します。起動確認が取れない場合は自動的に元のバージョンへ戻ります</li>
+    </ol>
+    <button id="btnOta" disabled>OTAモードを開始</button>
+  </div>
+</div>
+
+</main>
+
+<nav>
+  <button data-tab="connect" class="active">接続</button>
+  <button data-tab="status">状態</button>
+  <button data-tab="config">設定</button>
+  <button data-tab="map">マップ</button>
+  <button data-tab="ota">更新</button>
+</nav>
+
+<div id="toast"></div>
+<div id="errOverlay"></div>
+
+<!-- ============================================================
+     スクリプト構成に関する注意(冒頭コメントのBluefy互換性要件を参照):
+     複数<script>ブロック分割・CBQ_接頭辞・ES5構文・非strictは
+     Bluefyでの動作に必須のため、リファクタリングで統合しないこと。
+     ============================================================ -->
+
+<!-- S1: エラー可視化(Bluefyには開発者ツールが無いため、エラー時のみ画面上部に赤帯表示) -->
+<script>
+function cbqShowError(prefix, msg) {
+  var el = document.getElementById("errOverlay");
+  if (el) {
+    el.textContent = el.textContent + (el.textContent ? " / " : "") + prefix + msg;
+    el.style.display = "block";
+  }
+}
+window.addEventListener("error", function (e) {
+  var msg = e.message + " (" + (e.filename || "") + ":" + e.lineno + ")";
+  if (e.error && e.error.stack) msg += " [" + String(e.error.stack).split("\n")[0] + "]";
+  cbqShowError("JSエラー: ", msg);
+});
+window.addEventListener("unhandledrejection", function (e) {
+  cbqShowError("Promiseエラー: ", (e.reason && e.reason.message ? e.reason.message : e.reason));
+});
+</script>
+
+<!-- S2: 定数定義(ファームウェア BleService.h / Config.h と一致させること) -->
+<script>
+var CBQ_UUID = {
+  service:    "e2cf679b-3479-4943-9abf-f2e00e0530b0",
+  status:     "9a6e6534-0eb4-43f7-b084-33ae33e54b8d",
+  config:     "db7adf1c-1548-4d9c-a352-73930921a7dc",
+  cutMap:     "5b6b5cc9-ab45-412b-beec-1738b25cfc65",
+  command:    "30b9bccb-2422-4783-a11e-b700ed2de0ff",
+  deviceInfo: "56d9d6f9-c19b-43bf-a7d4-c252db0ee584",
+  apPass:     "11c69f27-ef0e-4e88-8388-91e739787e97"
+};
+var CBQ_CMD_SAVE = 1, CBQ_CMD_ENTER_OTA = 2, CBQ_CMD_FACTORY_RESET = 3;
+var CBQ_ERR_BITS = [
+  [1, "ギア推定が無効(回転数と車速がどのギアの比とも合わない)"],
+  [2, "設定データが初期化されました(要再設定)"],
+  [4, "カットタイムマップが初期化されました(要再設定)"]
+];
+var CBQ_COOL_TABLE = [200,250,300,350,400,450,500,550,600,650,700,750,800,850,900,950];
+var CBQ_DELAY_TABLE = [0,5,10,15,20,25,30,40,50,60,80,100,120,140,170,200];
+var CBQ_CUT_MIN_MS = 50, CBQ_CUT_STEP_MS = 5, CBQ_CUT_LEVELS = 15;
+var CBQ_BANDS = ["Low", "Mid", "Hi"];
+var CBQ_MAP_GEARS = 6;      // 本体のマップ配列は6列(MQSと同じ)。CB750Fは5速
+var CBQ_SHOWN_GEARS = 4;    // 5速(最上段)はカットしないので1〜4速だけ表示する
+var CBQ_SHIFT_MV_MAX = 5500; // Settings.cppのSHIFT_MV_MAX(3300mV×25/15)
+var CBQ_STATUS_LEN = 12;
+var CBQ_device = null, CBQ_chars = {};
+var CBQ_mapRaw = null;      // 本体から読んだ18バイト(表示しない列の値をそのまま書き戻すため)
+</script>
+
+<!-- S3: 汎用ヘルパー -->
+<script>
+function cbq$(id) { return document.getElementById(id); }
+function cbqToast(msg) {
+  var t = cbq$("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(t._tm);
+  t._tm = setTimeout(function () { t.classList.remove("show"); }, 2200);
+}
+function cbqDecodeText(dv) {
+  var buf = dv.buffer ? dv.buffer : dv;
+  if (window.TextDecoder) return new TextDecoder().decode(buf);
+  var u8 = new Uint8Array(buf), s = "", i;
+  for (i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]);
+  return s;
+}
+function cbqEncodeText(str) {
+  if (window.TextEncoder) return new TextEncoder().encode(str);
+  var u8 = new Uint8Array(str.length), i;
+  for (i = 0; i < str.length; i++) u8[i] = str.charCodeAt(i) & 0xFF;
+  return u8;
+}
+</script>
+
+<!-- S4: タブ切り替え+UI構築 -->
+<script>
+(function () {
+  var btns = document.querySelectorAll("nav button");
+  function activate(btn) {
+    var i, all = document.querySelectorAll("nav button"),
+        tabs = document.querySelectorAll(".tab");
+    for (i = 0; i < all.length; i++) all[i].classList.remove("active");
+    for (i = 0; i < tabs.length; i++) tabs[i].classList.remove("active");
+    btn.classList.add("active");
+    cbq$("tab-" + btn.getAttribute("data-tab")).classList.add("active");
+  }
+  for (var i = 0; i < btns.length; i++) {
+    (function (btn) {
+      btn.addEventListener("click", function () { activate(btn); });
+    })(btns[i]);
+  }
+})();
+
+function cbqFillLevelSelect(sel, table, unit) {
+  for (var lv = 0; lv < table.length; lv++) {
+    var o = document.createElement("option");
+    o.value = lv;
+    o.textContent = table[lv] + unit + " (Lv" + lv + ")";
+    sel.appendChild(o);
+  }
+}
+cbqFillLevelSelect(cbq$("selCool"), CBQ_COOL_TABLE, "ms");
+cbqFillLevelSelect(cbq$("selDelay"), CBQ_DELAY_TABLE, "ms");
+
+(function () {
+  var html = "<tr><th></th>", g, b, lv;
+  for (g = 1; g <= CBQ_SHOWN_GEARS; g++) html += "<th>" + g + "速</th>";
+  html += "</tr>";
+  for (b = 0; b < CBQ_BANDS.length; b++) {
+    html += "<tr><th>" + CBQ_BANDS[b] + "</th>";
+    for (g = 0; g < CBQ_SHOWN_GEARS; g++) {
+      html += '<td><select class="mapCell" data-i="' + (b * CBQ_MAP_GEARS + g) + '">';
+      for (lv = 0; lv < CBQ_CUT_LEVELS; lv++) {
+        html += '<option value="' + lv + '">' + (CBQ_CUT_MIN_MS + lv * CBQ_CUT_STEP_MS) + "</option>";
+      }
+      html += "</select></td>";
+    }
+    html += "</tr>";
+  }
+  cbq$("mapTable").innerHTML = html;
+})();
+
+function cbqUpdateShiftModeUi() {
+  var analog = cbq$("selShiftMode").value === "1";
+  if (analog) { cbq$("analogBox").classList.remove("hide"); } else { cbq$("analogBox").classList.add("hide"); }
+}
+cbqUpdateShiftModeUi();
+
+document.addEventListener("change", function (e) {
+  if (e.target && e.target.classList && e.target.classList.contains("mapCell")) {
+    e.target.classList.add("dirty");
+  }
+  if (e.target && e.target.id === "selShiftMode") {
+    cbqUpdateShiftModeUi();
+  }
+});
+</script>
+
+<!-- S5: 接続状態UI+Status通知+読み出し処理 -->
+<script>
+function cbqSetConnectedUi(on) {
+  var ids = ["btnWriteConfig","btnWritePass","btnReadPass","btnSave","btnFactory",
+             "btnWriteMap","btnReloadMap","btnOta"];
+  if (on) { cbq$("connDot").classList.add("on"); } else { cbq$("connDot").classList.remove("on"); }
+  cbq$("connText").textContent = on ? "接続中: " + (CBQ_device ? CBQ_device.name : "") : "未接続";
+  cbq$("btnDisconnect").disabled = !on;
+  for (var i = 0; i < ids.length; i++) cbq$(ids[i]).disabled = !on;
+  cbq$("btnConnect").disabled = on;
+}
+
+function cbqOnDisconnected() {
+  CBQ_chars = {};
+  cbqSetConnectedUi(false);
+  cbqToast("切断されました");
+}
+
+function cbqOnStatusNotify(e) {
+  var dv = e.target.value;
+  if (dv.byteLength < CBQ_STATUS_LEN || dv.getUint8(0) !== 1) return; // レイアウト不一致は無視
+  var rpm     = dv.getUint16(1, true);
+  var gear    = dv.getUint8(3);
+  var band    = dv.getUint8(4);
+  var flags   = dv.getUint8(5);
+  var cutting = (flags & 1) !== 0;
+  var clutch  = (flags & 2) !== 0;
+  var neutral = (flags & 4) !== 0;
+  var lastCut = dv.getUint16(6, true);
+  var errMask = dv.getUint16(8, true);
+  var shiftMv = dv.getUint16(10, true);
+
+  cbq$("stGear").textContent = (gear >= 1 && gear <= 5) ? gear : (neutral ? "N" : "-");
+  cbq$("stRpm").textContent = rpm;
+  cbq$("stBand").textContent = CBQ_BANDS[band] || "-";
+  cbq$("stClutch").textContent = clutch ? "On" : "Off";
+  cbq$("stClutch").className = clutch ? "v on" : "v";
+  cbq$("stNeutral").textContent = neutral ? "N" : "-";
+  cbq$("stNeutral").className = neutral ? "v on" : "v";
+  cbq$("stCut").textContent = lastCut > 0 ? lastCut + "ms" : "-";
+  cbq$("cutFlag").style.visibility = cutting ? "visible" : "hidden";
+  cbq$("stShiftMv").textContent = shiftMv + "mV";
+  cbq$("liveMv").textContent = shiftMv;
+
+  var banner = cbq$("errBanner");
+  if (errMask !== 0) {
+    var msgs = [], i;
+    for (i = 0; i < CBQ_ERR_BITS.length; i++) {
+      if (errMask & CBQ_ERR_BITS[i][0]) msgs.push("⚠ " + CBQ_ERR_BITS[i][1]);
+    }
+    if (msgs.length === 0) msgs.push("⚠ 異常コード: " + errMask);
+    banner.innerHTML = msgs.join("<br>");
+    banner.style.display = "block";
+  } else {
+    banner.style.display = "none";
+  }
+}
+
+function cbqReadConfig() {
+  return CBQ_chars.config.readValue().then(function (dv) {
+    if (dv.byteLength >= 7) {
+      cbq$("selCool").value = dv.getUint8(0);
+      cbq$("selDelay").value = dv.getUint8(1);
+      cbq$("selShiftMode").value = dv.getUint8(2);
+      cbq$("inThreshold").value = dv.getUint16(3, true);
+      cbq$("inHysteresis").value = dv.getUint16(5, true);
+      cbqUpdateShiftModeUi();
+    }
+  });
+}
+
+function cbqReadMap() {
+  return CBQ_chars.cutMap.readValue().then(function (dv) {
+    if (dv.byteLength >= CBQ_BANDS.length * CBQ_MAP_GEARS) {
+      var i;
+      CBQ_mapRaw = new Uint8Array(CBQ_BANDS.length * CBQ_MAP_GEARS);
+      for (i = 0; i < CBQ_mapRaw.length; i++) CBQ_mapRaw[i] = dv.getUint8(i);
+      var cells = document.querySelectorAll(".mapCell");
+      for (i = 0; i < cells.length; i++) {
+        cells[i].value = CBQ_mapRaw[Number(cells[i].getAttribute("data-i"))];
+        cells[i].classList.remove("dirty");
+      }
+    }
+  });
+}
+</script>
+
+<!-- S6: 接続/切断ボタン -->
+<script>
+cbq$("btnConnect").addEventListener("click", function () {
+  if (!navigator.bluetooth) {
+    cbqToast("このブラウザはWeb Bluetooth非対応です(Bluefyで開いてください)");
+    return;
+  }
+  var service = null;
+  navigator.bluetooth.requestDevice({ filters: [{ services: [CBQ_UUID.service] }] })
+    .then(function (dev) {
+      CBQ_device = dev;
+      CBQ_device.addEventListener("gattserverdisconnected", cbqOnDisconnected);
+      return CBQ_device.gatt.connect();
+    })
+    .then(function (server) {
+      return server.getPrimaryService(CBQ_UUID.service);
+    })
+    .then(function (svc) {
+      service = svc;
+      var keys = [], k;
+      for (k in CBQ_UUID) { if (k !== "service") keys.push(k); }
+      var p = Promise.resolve();
+      function addStep(key) {
+        p = p.then(function () {
+          return service.getCharacteristic(CBQ_UUID[key]).then(function (c) { CBQ_chars[key] = c; });
+        });
+      }
+      for (var i = 0; i < keys.length; i++) addStep(keys[i]);
+      return p;
+    })
+    .then(function () {
+      return CBQ_chars.status.startNotifications();
+    })
+    .then(function () {
+      CBQ_chars.status.addEventListener("characteristicvaluechanged", cbqOnStatusNotify);
+      return CBQ_chars.deviceInfo.readValue();
+    })
+    .then(function (dv) {
+      var ver = cbqDecodeText(dv);
+      cbq$("fwVer").textContent = "ファームウェア: v" + ver;
+      cbq$("fwVer2").textContent = "ファームウェア: v" + ver;
+      return cbqReadConfig();
+    })
+    .then(function () { return cbqReadMap(); })
+    .then(function () {
+      cbqSetConnectedUi(true);
+      cbqToast("接続しました");
+    })
+    ["catch"](function (e) {
+      if (e && e.name !== "NotFoundError") cbqToast("接続失敗: " + (e.message || e));
+    });
+});
+
+cbq$("btnDisconnect").addEventListener("click", function () {
+  if (CBQ_device && CBQ_device.gatt.connected) CBQ_device.gatt.disconnect();
+});
+</script>
+
+<!-- S7: 書き込み系ハンドラ+コマンド -->
+<script>
+function cbqReadMvInput(id, label) {
+  var s = String(cbq$(id).value), v = Number(s);
+  if (s === "" || isNaN(v) || v < 0 || v > CBQ_SHIFT_MV_MAX || Math.floor(v) !== v) {
+    cbqToast(label + "は0〜" + CBQ_SHIFT_MV_MAX + "の整数で入力してください");
+    return -1;
+  }
+  return v;
+}
+
+cbq$("btnWriteConfig").addEventListener("click", function () {
+  var th = cbqReadMvInput("inThreshold", "閾値");
+  if (th < 0) return;
+  var hy = cbqReadMvInput("inHysteresis", "ヒステリシス");
+  if (hy < 0) return;
+  // Config(7バイト): [0]クール [1]ディレイ [2]シフトモード [3..4]閾値mV [5..6]ヒステリシスmV(LE)
+  var payload = new Uint8Array([
+    Number(cbq$("selCool").value),
+    Number(cbq$("selDelay").value),
+    Number(cbq$("selShiftMode").value),
+    th & 0xFF, (th >> 8) & 0xFF,
+    hy & 0xFF, (hy >> 8) & 0xFF
+  ]);
+  CBQ_chars.config.writeValue(payload)
+    .then(function () { return cbqReadConfig(); }) // 本体が受け付けた値を表示し直す
+    .then(function () { cbqToast("設定を本体へ反映しました"); })
+    ["catch"](function (e) { cbqToast("書き込み失敗: " + (e.message || e)); });
+});
+
+cbq$("btnWriteMap").addEventListener("click", function () {
+  if (!CBQ_mapRaw) { cbqToast("先に本体からマップを読み込んでください"); return; }
+  var buf = new Uint8Array(CBQ_mapRaw); // 表示しない列(5速・6速)は読み込んだ値のまま
+  var cells = document.querySelectorAll(".mapCell");
+  for (var i = 0; i < cells.length; i++) {
+    buf[Number(cells[i].getAttribute("data-i"))] = Number(cells[i].value);
+  }
+  CBQ_chars.cutMap.writeValue(buf)
+    .then(function () { return cbqReadMap(); })
+    .then(function () { cbqToast("マップを本体へ反映しました"); })
+    ["catch"](function (e) { cbqToast("書き込み失敗: " + (e.message || e)); });
+});
+
+cbq$("btnReloadMap").addEventListener("click", function () {
+  cbqReadMap()
+    .then(function () { cbqToast("本体から再読込しました"); })
+    ["catch"](function (e) { cbqToast("読込失敗: " + (e.message || e)); });
+});
+
+cbq$("btnWritePass").addEventListener("click", function () {
+  var pw = cbq$("inApPass").value;
+  if (pw.length < 8 || pw.length > 63) { cbqToast("8〜63文字で入力してください"); return; }
+  CBQ_chars.apPass.writeValue(cbqEncodeText(pw))
+    .then(function () { cbqToast("パスワードを変更・保存しました"); })
+    ["catch"](function (e) { cbqToast("変更失敗: " + (e.message || e)); });
+});
+
+cbq$("btnReadPass").addEventListener("click", function () {
+  CBQ_chars.apPass.readValue()
+    .then(function (dv) {
+      cbq$("inApPass").value = cbqDecodeText(dv);
+      cbq$("inApPass").type = "text";
+      cbqToast("現在のパスワードを表示しました");
+    })
+    ["catch"](function (e) { cbqToast("読込失敗: " + (e.message || e)); });
+});
+
+function cbqSendCommand(code) {
+  return CBQ_chars.command.writeValue(new Uint8Array([code]));
+}
+
+// 2度押し確認: WKWebView(Bluefy)ではconfirm()ダイアログが表示されない既知の制約が
+// あるため、「1回目のタップで警告表示→3秒以内の2回目のタップで実行」方式にする。
+function cbqRequireDoubleTap(btn, warnText, action) {
+  var original = btn.textContent;
+  btn.addEventListener("click", function () {
+    if (btn.classList.contains("confirming")) {
+      btn.classList.remove("confirming");
+      btn.textContent = original;
+      clearTimeout(btn._tm);
+      action();
+    } else {
+      btn.classList.add("confirming");
+      btn.textContent = warnText;
+      btn._tm = setTimeout(function () {
+        btn.classList.remove("confirming");
+        btn.textContent = original;
+      }, 3000);
+    }
+  });
+}
+
+cbq$("btnSave").addEventListener("click", function () {
+  cbqSendCommand(CBQ_CMD_SAVE)
+    .then(function () { cbqToast("本体に保存しました"); })
+    ["catch"](function (e) { cbqToast("保存失敗: " + (e.message || e)); });
+});
+
+cbqRequireDoubleTap(cbq$("btnFactory"), "もう一度タップで初期化を実行", function () {
+  cbqSendCommand(CBQ_CMD_FACTORY_RESET)
+    .then(function () { return cbqReadConfig(); })
+    .then(function () { return cbqReadMap(); })
+    .then(function () {
+      cbq$("inApPass").value = "";
+      cbqToast("工場出荷リセットしました");
+    })
+    ["catch"](function (e) { cbqToast("リセット失敗: " + (e.message || e)); });
+});
+
+cbqRequireDoubleTap(cbq$("btnOta"), "もう一度タップでOTA開始", function () {
+  cbqSendCommand(CBQ_CMD_ENTER_OTA)
+    .then(function () { cbqToast("OTAモード開始。Wi-Fi設定で「MQS-RS-Setup」へ接続してください"); })
+    ["catch"](function (e) { cbqToast("開始失敗: " + (e.message || e)); });
+});
+
+</script>
+</body>
+</html>
