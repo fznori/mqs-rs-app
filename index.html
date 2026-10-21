@@ -42,7 +42,7 @@ header {
 header h1 { margin: 0; font-size: 2.6em; letter-spacing: .02em; font-weight: 800; line-height: 1.1; }
 header .sub { color: var(--muted); font-size: .95em; letter-spacing: .08em; margin-top: 4px; }
 header .tagline {
-  text-align: left; font-size: .9em; padding: 12px 4px;
+  text-align: center; font-size: .9em; padding: 12px 4px;
   margin-top: 12px; border-top: 1px solid #2c2c2e;
 }
 
@@ -213,11 +213,18 @@ ol.steps { font-size: .88em; line-height: 1.7; padding-left: 1.3em; color: var(-
       <div class="live"><span id="liveMv">-</span> <small>mV(現在のセンサー電圧)</small></div>
       <p class="hint">センサーを押していない状態と、シフトするときの力で押した状態の電圧を見て、閾値を決めてください。</p>
       <div class="row">
-        <label>閾値(mV)<br><span class="hint">この電圧以上でシフト検知</span></label>
+        <label>検知の向き<br><span class="hint">シフト操作で電圧がどちらに動くか</span></label>
+        <select id="selShiftDir">
+          <option value="0">上がる(閾値以上で検知)</option>
+          <option value="1">下がる(閾値以下で検知)</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>閾値(mV)<br><span class="hint" id="thHint">この電圧以上でシフト検知</span></label>
         <input type="number" id="inThreshold" min="0" max="5500" step="10" inputmode="numeric">
       </div>
       <div class="row">
-        <label>ヒステリシス(mV)<br><span class="hint">閾値−この値を下回ると解除</span></label>
+        <label>ヒステリシス(mV)<br><span class="hint" id="hyHint">閾値−この値を下回ると解除</span></label>
         <input type="number" id="inHysteresis" min="0" max="5500" step="10" inputmode="numeric">
       </div>
     </div>
@@ -415,6 +422,9 @@ cbqFillLevelSelect(cbq$("selDelay"), CBQ_DELAY_TABLE, "ms");
 function cbqUpdateShiftModeUi() {
   var analog = cbq$("selShiftMode").value === "1";
   if (analog) { cbq$("analogBox").classList.remove("hide"); } else { cbq$("analogBox").classList.add("hide"); }
+  var falling = cbq$("selShiftDir").value === "1";
+  cbq$("thHint").textContent = falling ? "この電圧以下でシフト検知" : "この電圧以上でシフト検知";
+  cbq$("hyHint").textContent = falling ? "閾値+この値を上回ると解除" : "閾値−この値を下回ると解除";
 }
 cbqUpdateShiftModeUi();
 
@@ -422,7 +432,7 @@ document.addEventListener("change", function (e) {
   if (e.target && e.target.classList && e.target.classList.contains("mapCell")) {
     e.target.classList.add("dirty");
   }
-  if (e.target && e.target.id === "selShiftMode") {
+  if (e.target && (e.target.id === "selShiftMode" || e.target.id === "selShiftDir")) {
     cbqUpdateShiftModeUi();
   }
 });
@@ -500,6 +510,7 @@ function cbqReadConfig() {
       cbq$("selShiftMode").value = dv.getUint8(2);
       cbq$("inThreshold").value = dv.getUint16(3, true);
       cbq$("inHysteresis").value = dv.getUint16(5, true);
+      if (dv.byteLength >= 8) cbq$("selShiftDir").value = dv.getUint8(7);
       cbqUpdateShiftModeUi();
     }
   });
@@ -595,13 +606,14 @@ cbq$("btnWriteConfig").addEventListener("click", function () {
   if (th < 0) return;
   var hy = cbqReadMvInput("inHysteresis", "ヒステリシス");
   if (hy < 0) return;
-  // Config(7バイト): [0]クール [1]ディレイ [2]シフトモード [3..4]閾値mV [5..6]ヒステリシスmV(LE)
+  // Config(8バイト): [0]クール [1]ディレイ [2]シフトモード [3..4]閾値mV [5..6]ヒステリシスmV(LE) [7]検知の向き
   var payload = new Uint8Array([
     Number(cbq$("selCool").value),
     Number(cbq$("selDelay").value),
     Number(cbq$("selShiftMode").value),
     th & 0xFF, (th >> 8) & 0xFF,
-    hy & 0xFF, (hy >> 8) & 0xFF
+    hy & 0xFF, (hy >> 8) & 0xFF,
+    Number(cbq$("selShiftDir").value)
   ]);
   CBQ_chars.config.writeValue(payload)
     .then(function () { return cbqReadConfig(); }) // 本体が受け付けた値を表示し直す
